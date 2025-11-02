@@ -1,9 +1,9 @@
 <?php
 // Database configuration - UPDATE THESE VALUES WITH YOUR DATABASE CREDENTIALS
-$host = 'bnoykenhuvwibsbxjiig-mysql.services.clever-cloud.com';          // Your database host (usually 'localhost')
-$dbname = 'bnoykenhuvwibsbxjiig';    // Your database name
-$username = 'ucapzyitefhv9siz';           // Your database username
-$password = 'qQLLfipQhXbVo5TW5igZ';               // Your database password
+$host = 'bheewuqktoousmianri0-mysql.services.clever-cloud.com';          // Your database host (usually 'localhost')
+$dbname = 'bheewuqktoousmianri0';    // Your database name
+$username = 'un7jktglvtdihni2';           // Your database username
+$password = 'K4I5u7xYVqNPTQaoo8nA';               // Your database password
 
 try {
     // Create connection
