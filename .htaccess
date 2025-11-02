@@ -1,0 +1,12 @@
+# Enable URL rewriting
+RewriteEngine On
+
+# Remove the .php extension from URLs
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteCond %{REQUEST_FILENAME}\.php -f
+RewriteRule ^(.*)$ $1.php [L,QSA]
+
+# Optional: Redirect URLs with .php extension to clean URLs (e.g., home.php to home)
+RewriteCond %{THE_REQUEST} "^[^ ]* .*?\.php[? ].*$"
+RewriteRule ^(.*)\.php$ /$1 [R=301,L]
+
