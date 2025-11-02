@@ -1,9 +1,9 @@
 <?php
 // Database configuration - UPDATE THESE VALUES WITH YOUR DATABASE CREDENTIALS
-$host = 'localhost';          // Your database host (usually 'localhost')
-$dbname = 'lost_found';    // Your database name
-$username = 'root';           // Your database username
-$password = '';               // Your database password
+$host = 'bnoykenhuvwibsbxjiig-mysql.services.clever-cloud.com';          // Your database host (usually 'localhost')
+$dbname = 'bnoykenhuvwibsbxjiig';    // Your database name
+$username = 'ucapzyitefhv9siz';           // Your database username
+$password = 'qQLLfipQhXbVo5TW5igZ';               // Your database password
 
 try {
     // Create connection
