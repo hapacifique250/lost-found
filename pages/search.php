@@ -38,33 +38,98 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_claim'])) {
       $item = $itemStmt->fetch(PDO::FETCH_ASSOC);
 
       if (!$item) {
-        $claim_error = "Item not found or not available for claiming.";
+        $claim_error = "Item not found or no longer available for claiming.";
       } else {
         // Check if user is trying to claim their own item
         if ($item['owner_id'] == $user_id) {
-          $claim_error = "You cannot claim your own item. Please contact admin if you need assistance.";
+          $claim_error = "You cannot claim your own item. If you need to update or remove this item, please go to your dashboard.";
         } else {
           // Check if user already claimed this item
-          $existingClaimStmt = $pdo->prepare("SELECT id FROM claims WHERE item_id = ? AND claimer_id = ?");
+          $existingClaimStmt = $pdo->prepare("SELECT id, status FROM claims WHERE item_id = ? AND claimer_id = ?");
           $existingClaimStmt->execute([$item_id, $user_id]);
           $existingClaim = $existingClaimStmt->fetch(PDO::FETCH_ASSOC);
 
           if ($existingClaim) {
-            $claim_error = "You have already submitted a claim for this item.";
+            if ($existingClaim['status'] === 'pending') {
+              $claim_error = "You already have a pending claim for this item. Please wait for the owner to respond.";
+            } else if ($existingClaim['status'] === 'approved') {
+              $claim_error = "Your claim for this item has already been approved! Please contact the item owner to arrange pickup.";
+            } else {
+              $claim_error = "You previously submitted a claim for this item that was rejected. You cannot submit another claim for the same item.";
+            }
           } else {
-            // Insert claim
-            $stmt = $pdo->prepare("
-                            INSERT INTO claims (item_id, claimer_id, message, status, created_at, updated_at) 
-                            VALUES (?, ?, ?, 'pending', NOW(), NOW())
-                        ");
+            // Start transaction to ensure both operations succeed
+            $pdo->beginTransaction();
 
-            $stmt->execute([
-              $item_id,
-              $user_id,
-              $proof
-            ]);
+            try {
+              // Insert claim
+              $stmt = $pdo->prepare("
+        INSERT INTO claims (item_id, claimer_id, message, status, created_at, updated_at) 
+        VALUES (?, ?, ?, 'pending', NOW(), NOW())
+    ");
+              $stmt->execute([
+                $item_id,
+                $user_id,
+                $proof
+              ]);
 
-            $claim_success = "Claim submitted successfully! We'll contact you soon.";
+              // Get the claim ID that was just inserted
+              $claim_id = $pdo->lastInsertId();
+
+              // Update item status to 'claimed'
+              $updateItemStmt = $pdo->prepare("
+        UPDATE items 
+        SET status = 'claimed', updated_at = NOW() 
+        WHERE id = ?
+    ");
+              $updateItemStmt->execute([$item_id]);
+
+              // Get detailed information for notification
+              $detailsStmt = $pdo->prepare("
+        SELECT 
+            i.user_id as owner_id,
+            i.title as item_title,
+            i.type as item_type,
+            owner.name as owner_name,
+            claimant.name as claimant_name
+        FROM items i 
+        JOIN users owner ON i.user_id = owner.id 
+        JOIN users claimant ON claimant.id = ?
+        WHERE i.id = ?
+    ");
+              $detailsStmt->execute([$user_id, $item_id]);
+              $details = $detailsStmt->fetch(PDO::FETCH_ASSOC);
+
+              if ($details) {
+                // Create notification for item owner
+                $notificationStmt = $pdo->prepare("
+            INSERT INTO notifications (user_id, title, message, type, action_url, created_at) 
+            VALUES (?, ?, ?, 'warning', ?, NOW())
+        ");
+
+                $itemType = $details['item_type'] === 'lost' ? 'lost item' : 'found item';
+                $notificationTitle = "📢 New Claim on Your {$itemType}";
+                $notificationMessage = "{$details['claimant_name']} has submitted a claim for your {$itemType}: \"{$proof}\"";
+                $actionUrl = "../pages/dashboard"; // Redirect to dashboard where they can see claims
+
+                $notificationStmt->execute([
+                  $details['owner_id'],
+                  $notificationTitle,
+                  $notificationMessage,
+                  $actionUrl
+                ]);
+              }
+
+              // Commit transaction
+              $pdo->commit();
+
+              $claim_success = "Claim submitted successfully! The item has been marked as claimed and the owner will contact you soon.";
+
+            } catch (Exception $e) {
+              // Rollback transaction if any operation fails
+              $pdo->rollBack();
+              throw $e;
+            }
           }
         }
       }
@@ -74,14 +139,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_claim'])) {
   }
 }
 
-// Fetch items from database with filters - ALL ITEMS regardless of type
+// Fetch items from database with filters - Only show active items (not claimed)
 $category = $_GET['category'] ?? '';
 $search = $_GET['search'] ?? '';
 $location = $_GET['location'] ?? '';
 $sort = $_GET['sort'] ?? 'newest';
 $item_type = $_GET['type'] ?? ''; // Optional type filter
 
-// Build query - REMOVED type condition to show all items
+// Build query - Only show active items (not claimed)
 $query = "
     SELECT 
         items.*,
@@ -132,20 +197,28 @@ $stmt = $pdo->prepare($query);
 $stmt->execute($params);
 $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Get categories for filter - ALL categories
+// Get categories for filter - Only active items
 $categoryStmt = $pdo->prepare("SELECT DISTINCT category FROM items WHERE status = 'active' ORDER BY category");
 $categoryStmt->execute();
 $categories = $categoryStmt->fetchAll(PDO::FETCH_COLUMN);
 
-// Get locations for filter - ALL locations
+// Get locations for filter - Only active items
 $locationStmt = $pdo->prepare("SELECT DISTINCT location FROM items WHERE status = 'active' ORDER BY location");
 $locationStmt->execute();
 $locations = $locationStmt->fetchAll(PDO::FETCH_COLUMN);
 
-// Get types for filter
+// Get types for filter - Only active items
 $typeStmt = $pdo->prepare("SELECT DISTINCT type FROM items WHERE status = 'active' ORDER BY type");
 $typeStmt->execute();
 $types = $typeStmt->fetchAll(PDO::FETCH_COLUMN);
+
+// For logged-in users, get their existing claims to show status
+$user_claims = [];
+if ($is_logged_in) {
+  $userClaimsStmt = $pdo->prepare("SELECT item_id, status FROM claims WHERE claimer_id = ?");
+  $userClaimsStmt->execute([$user_id]);
+  $user_claims = $userClaimsStmt->fetchAll(PDO::FETCH_ASSOC);
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -250,6 +323,11 @@ $types = $typeStmt->fetchAll(PDO::FETCH_COLUMN);
       background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
       color: white;
     }
+
+    .claim-status-badge {
+      font-size: 0.7rem;
+      padding: 0.25em 0.5em;
+    }
   </style>
 </head>
 
@@ -298,12 +376,12 @@ $types = $typeStmt->fetchAll(PDO::FETCH_COLUMN);
                   </a>
                 </li>
                 <li>
-                  <a class="dropdown-item" href="../user/profile">
+                  <a class="dropdown-item" href="#">
                     <i class="bi bi-person-circle me-2"></i>My Profile
                   </a>
                 </li>
                 <li>
-                  <a class="dropdown-item" href="../user/my-items">
+                  <a class="dropdown-item" href="#">
                     <i class="bi bi-bag me-2"></i>My Items
                   </a>
                 </li>
@@ -341,13 +419,13 @@ $types = $typeStmt->fetchAll(PDO::FETCH_COLUMN);
             Browse All Items
           </h1>
           <p class="lead mb-0" style="font-family: 'Poppins', sans-serif;">
-            View all lost and found items in one place
+            Find lost items or claim found items - Help reunite belongings with their owners
           </p>
         </div>
         <div class="col-md-4 text-md-end">
           <div class="bg-white bg-opacity-20 rounded-pill px-4 py-2 d-inline-block text-primary">
             <small style="font-family: 'Poppins', sans-serif;">
-              <i class="bi bi-info-circle me-1"></i>Showing all active items
+              <i class="bi bi-info-circle me-1"></i>All items can be claimed
             </small>
           </div>
         </div>
@@ -360,7 +438,7 @@ $types = $typeStmt->fetchAll(PDO::FETCH_COLUMN);
     <div class="container">
       <div class="text-center mb-4">
         <h2 class="fw-bold">Browse Items</h2>
-        <p class="text-muted">Search through all lost and found items</p>
+        <p class="text-muted">Search through all lost and found items - Anyone can claim any item</p>
       </div>
 
       <!-- Search Form -->
@@ -441,7 +519,18 @@ $types = $typeStmt->fetchAll(PDO::FETCH_COLUMN);
             <p class="text-muted">Try adjusting your search or filters</p>
           </div>
         <?php else: ?>
-          <?php foreach ($items as $item): ?>
+          <?php foreach ($items as $item):
+            // Check if user has already claimed this item
+            $user_claim_status = null;
+            if ($is_logged_in) {
+              foreach ($user_claims as $claim) {
+                if ($claim['item_id'] == $item['id']) {
+                  $user_claim_status = $claim['status'];
+                  break;
+                }
+              }
+            }
+            ?>
             <div class="col-md-4 mb-4">
               <div class="card item-card h-100" onclick="viewItemDetails(<?php echo $item['id']; ?>)">
                 <img
@@ -451,9 +540,19 @@ $types = $typeStmt->fetchAll(PDO::FETCH_COLUMN);
                 <div class="card-body">
                   <div class="d-flex justify-content-between align-items-start mb-2">
                     <h5 class="card-title fw-bold"><?php echo htmlspecialchars($item['title']); ?></h5>
-                    <span class="badge <?php echo $item['type'] === 'lost' ? 'type-badge-lost' : 'type-badge-found'; ?>">
-                      <?php echo htmlspecialchars(ucfirst($item['type'])); ?>
-                    </span>
+                    <div>
+                      <span class="badge <?php echo $item['type'] === 'lost' ? 'type-badge-lost' : 'type-badge-found'; ?>">
+                        <?php echo htmlspecialchars(ucfirst($item['type'])); ?>
+                      </span>
+                      <?php if ($user_claim_status): ?>
+                        <span class="badge 
+                          <?php echo $user_claim_status === 'pending' ? 'bg-warning' :
+                            ($user_claim_status === 'approved' ? 'bg-success' : 'bg-danger'); ?> 
+                          claim-status-badge ms-1">
+                          <?php echo ucfirst($user_claim_status); ?>
+                        </span>
+                      <?php endif; ?>
+                    </div>
                   </div>
                   <p class="card-text text-muted"><?php echo htmlspecialchars(substr($item['description'], 0, 100)); ?>...
                   </p>
@@ -480,6 +579,7 @@ $types = $typeStmt->fetchAll(PDO::FETCH_COLUMN);
       </div>
     </div>
   </section>
+
   <!-- Item Modal -->
   <div class="modal fade" id="itemModal" tabindex="-1">
     <div class="modal-dialog modal-lg modal-dialog-centered">
@@ -511,9 +611,10 @@ $types = $typeStmt->fetchAll(PDO::FETCH_COLUMN);
                   id="modalContact"></span></p>
 
               <?php if ($is_logged_in): ?>
-                <!-- Debug info -->
-                <div class="alert alert-warning d-none" id="debugInfo">
-                  Debug: User ID: <?php echo $user_id; ?>
+                <!-- Claim Status Info -->
+                <div class="alert alert-info d-none" id="claimStatusInfo">
+                  <i class="bi bi-info-circle me-2"></i>
+                  <strong>Claim Status: </strong><span id="claimStatusText"></span>
                 </div>
 
                 <!-- Claim Button - Always visible but behavior changes -->
@@ -522,25 +623,24 @@ $types = $typeStmt->fetchAll(PDO::FETCH_COLUMN);
                 </button>
 
                 <!-- Admin Contact Message for Own Items -->
-                <div class="alert alert-info mt-3 d-none" id="ownItemMessage">
-                  <i class="bi bi-telephone me-2"></i>
-                  <strong>Contact Admin</strong>
-                  <p class="mb-1 mt-2">This is your own item. If you need assistance, please contact the admin.</p>
+                <div class="alert alert-warning mt-3 d-none" id="ownItemMessage">
+                  <i class="bi bi-shield-exclamation me-2"></i>
+                  <strong>This is Your Item</strong>
+                  <p class="mb-1 mt-2">You cannot claim your own item. To manage this item, please visit your dashboard.
+                  </p>
                   <div class="mt-2">
-                    <a href="mailto:admin@campus.edu" class="btn btn-sm btn-outline-info me-2">
-                      <i class="bi bi-envelope me-1"></i>Email Admin
-                    </a>
-                    <a href="tel:+1234567890" class="btn btn-sm btn-outline-info">
-                      <i class="bi bi-telephone me-1"></i>Call Admin
+                    <a href="dashboard" class="btn btn-sm btn-outline-primary">
+                      <i class="bi bi-grid me-1"></i>Go to Dashboard
                     </a>
                   </div>
                 </div>
               <?php else: ?>
                 <!-- Show login prompt for unlogged users -->
                 <div class="login-prompt">
-                  <i class="bi bi-info-circle me-2"></i>
-                  <strong>Login Required</strong>
-                  <p class="mb-2 mt-2">You need to be logged in to claim items.</p>
+                  <i class="bi bi-shield-lock me-2"></i>
+                  <strong>Login Required to Claim Items</strong>
+                  <p class="mb-2 mt-2">You need to be logged in to claim items and help reunite them with their owners.
+                  </p>
                   <a href="login" class="btn btn-primary btn-sm">
                     <i class="bi bi-box-arrow-in-right me-1"></i>Login Now
                   </a>
@@ -563,10 +663,16 @@ $types = $typeStmt->fetchAll(PDO::FETCH_COLUMN);
         </div>
         <div class="modal-body p-4">
           <?php if (isset($claim_error)): ?>
-            <div class="alert alert-danger"><?php echo $claim_error; ?></div>
+            <div class="alert alert-danger">
+              <i class="bi bi-exclamation-triangle me-2"></i>
+              <?php echo $claim_error; ?>
+            </div>
           <?php endif; ?>
           <?php if (isset($claim_success)): ?>
-            <div class="alert alert-success"><?php echo $claim_success; ?></div>
+            <div class="alert alert-success">
+              <i class="bi bi-check-circle me-2"></i>
+              <?php echo $claim_success; ?>
+            </div>
           <?php endif; ?>
 
           <form method="POST" id="claimForm">
@@ -574,83 +680,88 @@ $types = $typeStmt->fetchAll(PDO::FETCH_COLUMN);
             <input type="hidden" id="claimItemId" name="item_id">
             <div class="mb-3">
               <label for="claimName" class="form-label">Your Name</label>
-              <input type="text" class="form-control" id="claimName" name="claimer_name" 
-                value="<?php echo $is_logged_in ? htmlspecialchars($user_name) : ''; ?>" 
-                <?php echo !$is_logged_in ? 'disabled' : ''; ?> required>
+              <input type="text" class="form-control" id="claimName" name="claimer_name"
+                value="<?php echo $is_logged_in ? htmlspecialchars($user_name) : ''; ?>" <?php echo !$is_logged_in ? 'disabled' : ''; ?> required>
             </div>
             <div class="mb-3">
               <label for="claimEmail" class="form-label">Email Address</label>
-              <input type="email" class="form-control" id="claimEmail" name="claimer_email" 
-                value="<?php echo $is_logged_in ? htmlspecialchars($user_email) : ''; ?>" 
-                <?php echo !$is_logged_in ? 'disabled' : ''; ?> required>
+              <input type="email" class="form-control" id="claimEmail" name="claimer_email"
+                value="<?php echo $is_logged_in ? htmlspecialchars($user_email) : ''; ?>" <?php echo !$is_logged_in ? 'disabled' : ''; ?> required>
             </div>
             <div class="mb-3">
-              <label for="claimProof" class="form-label">Proof of Ownership</label>
-              <textarea class="form-control" id="claimProof" name="proof" rows="3"
-                placeholder="Describe how you can prove this item belongs to you..." required></textarea>
+              <label for="claimProof" class="form-label">Proof of Ownership/Identification</label>
+              <textarea class="form-control" id="claimProof" name="proof" rows="4"
+                placeholder="Please provide details to prove this item belongs to you. Include specific identifying features, when you lost/found it, or any other relevant information that can help verify your claim..."
+                required></textarea>
+              <div class="form-text">The more specific information you provide, the easier it will be to verify your
+                claim.</div>
             </div>
-            <button type="submit" class="btn btn-primary w-100">Submit Claim</button>
+            <div class="alert alert-info">
+              <i class="bi bi-lightbulb me-2"></i>
+              <strong>Tip:</strong> Provide detailed information about the item to help the owner verify your claim
+              quickly.
+            </div>
+            <button type="submit" class="btn btn-success w-100">
+              <i class="bi bi-send-check me-2"></i>Submit Claim Request
+            </button>
           </form>
         </div>
       </div>
     </div>
   </div>
 
-    <footer class="bg-dark text-white py-5">
-        <div class="container">
-            <div class="row g-4">
-                <div class="col-md-4">
-                    <h5 class="fw-bold mb-3">Campus Lost & Found</h5>
-                    <p class="text-white-50">Helping campus communities reunite with their belongings since 2024.</p>
-                    <div class="d-flex gap-3">
-                        <a href="#" class="text-white-50"><i class="bi bi-facebook fs-5"></i></a>
-                        <a href="#" class="text-white-50"><i class="bi bi-twitter fs-5"></i></a>
-                        <a href="#" class="text-white-50"><i class="bi bi-instagram fs-5"></i></a>
-                    </div>
-                </div>
-                <div class="col-md-2">
-                    <h6 class="fw-bold mb-3">Quick Links</h6>
-                    <ul class="list-unstyled">
-                        <li class="mb-2"><a href="pages/search" class="text-white-50 text-decoration-none">Browse
-                                Items</a></li>
-                        <li class="mb-2"><a href="pages/post" class="text-white-50 text-decoration-none">Post Item</a>
-                        </li>
-                        <li class="mb-2"><a href="#"
-                                class="text-white-50 text-decoration-none">Dashboard</a></li>
-                    </ul>
-                </div>
-                <div class="col-md-2">
-                    <h6 class="fw-bold mb-3">Support</h6>
-                    <ul class="list-unstyled">
-                        <li class="mb-2"><a href="#" class="text-white-50 text-decoration-none">Help Center</a></li>
-                        <li class="mb-2"><a href="#" class="text-white-50 text-decoration-none">Contact Us</a></li>
-                        <li class="mb-2"><a href="#" class="text-white-50 text-decoration-none">FAQs</a></li>
-                    </ul>
-                </div>
-                <div class="col-md-4">
-                    <h6 class="fw-bold mb-3">Campus Partnerships</h6>
-                    <p class="text-white-50 small">Trusted by universities nationwide</p>
-                    <div class="d-flex flex-wrap gap-2">
-                        <span class="badge bg-secondary">University A</span>
-                        <span class="badge bg-secondary">College B</span>
-                        <span class="badge bg-secondary">Institute C</span>
-                    </div>
-                </div>
-            </div>
-            <hr class="my-4 bg-white opacity-25">
-            <div class="text-center text-white-50 small">
-                <p class="mb-0">&copy; 2025 Campus Lost & Found. All rights reserved. | <a href="#"
-                        class="text-white-50">Privacy Policy</a> | <a href="#" class="text-white-50">Terms of
-                        Service</a></p>
-            </div>
+  <footer class="bg-dark text-white py-5">
+    <div class="container">
+      <div class="row g-4">
+        <div class="col-md-4">
+          <h5 class="fw-bold mb-3">Campus Lost & Found</h5>
+          <p class="text-white-50">Helping campus communities reunite with their belongings since 2024.</p>
+          <div class="d-flex gap-3">
+            <a href="#" class="text-white-50"><i class="bi bi-facebook fs-5"></i></a>
+            <a href="#" class="text-white-50"><i class="bi bi-twitter fs-5"></i></a>
+            <a href="#" class="text-white-50"><i class="bi bi-instagram fs-5"></i></a>
+          </div>
         </div>
-    </footer>
+        <div class="col-md-2">
+          <h6 class="fw-bold mb-3">Quick Links</h6>
+          <ul class="list-unstyled">
+            <li class="mb-2"><a href="pages/search" class="text-white-50 text-decoration-none">Browse Items</a></li>
+            <li class="mb-2"><a href="pages/post" class="text-white-50 text-decoration-none">Post Item</a></li>
+            <li class="mb-2"><a href="#" class="text-white-50 text-decoration-none">Dashboard</a></li>
+          </ul>
+        </div>
+        <div class="col-md-2">
+          <h6 class="fw-bold mb-3">Support</h6>
+          <ul class="list-unstyled">
+            <li class="mb-2"><a href="#" class="text-white-50 text-decoration-none">Help Center</a></li>
+            <li class="mb-2"><a href="#" class="text-white-50 text-decoration-none">Contact Us</a></li>
+            <li class="mb-2"><a href="#" class="text-white-50 text-decoration-none">FAQs</a></li>
+          </ul>
+        </div>
+        <div class="col-md-4">
+          <h6 class="fw-bold mb-3">Campus Partnerships</h6>
+          <p class="text-white-50 small">Trusted by universities nationwide</p>
+          <div class="d-flex flex-wrap gap-2">
+            <span class="badge bg-secondary">University A</span>
+            <span class="badge bg-secondary">College B</span>
+            <span class="badge bg-secondary">Institute C</span>
+          </div>
+        </div>
+      </div>
+      <hr class="my-4 bg-white opacity-25">
+      <div class="text-center text-white-50 small">
+        <p class="mb-0">&copy; 2025 Campus Lost & Found. All rights reserved. | <a href="#"
+            class="text-white-50">Privacy Policy</a> | <a href="#" class="text-white-50">Terms of Service</a></p>
+      </div>
+    </div>
+  </footer>
 
   <!-- Bootstrap JS -->
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
   <script>
     // Store all items data for client-side filtering
     const allItems = <?php echo json_encode($items); ?>;
+    const userClaims = <?php echo json_encode($user_claims); ?>;
 
     // Initialize when page loads
     document.addEventListener('DOMContentLoaded', function () {
@@ -681,7 +792,12 @@ $types = $typeStmt->fetchAll(PDO::FETCH_COLUMN);
           const proof = document.getElementById('claimProof').value;
 
           if (!name || !email || !proof) {
-            alert('Please fill in all fields');
+            alert('Please fill in all fields before submitting your claim.');
+            return;
+          }
+
+          if (proof.length < 10) {
+            alert('Please provide more detailed information about why you believe this item belongs to you.');
             return;
           }
 
@@ -768,33 +884,47 @@ $types = $typeStmt->fetchAll(PDO::FETCH_COLUMN);
       if (noResults) noResults.classList.add('d-none');
 
       if (itemsGrid) {
-        itemsGrid.innerHTML = items.map(item => `
-                <div class="col-md-4 mb-4">
-                    <div class="card item-card h-100" onclick="viewItemDetails(${item.id})">
-                        <img src="${item.image_url ? '..' + item.image_url : '../images/home.jpg'}" 
-                             class="card-img-top item-image" 
-                             alt="${item.title}"
-                             onerror="this.src='../images/home.jpg'">
-                        <div class="card-body">
-                            <div class="d-flex justify-content-between align-items-start mb-2">
-                                <h5 class="card-title fw-bold">${escapeHtml(item.title)}</h5>
-                                <span class="badge ${item.type === 'lost' ? 'type-badge-lost' : 'type-badge-found'}">
-                                    ${escapeHtml(item.type.charAt(0).toUpperCase() + item.type.slice(1))}
-                                </span>
-                            </div>
-                            <p class="card-text text-muted">${escapeHtml(item.description.substring(0, 100))}...</p>
-                            <div class="d-flex justify-content-between align-items-center mb-2">
-                                <span class="badge bg-primary">${escapeHtml(item.category)}</span>
-                                <small class="text-muted">${formatDate(item.date)}</small>
-                            </div>
-                            <p class="card-text"><i class="bi bi-geo-alt me-1"></i>${escapeHtml(item.location)}</p>
-                            <p class="card-text small text-muted">
-                                <i class="bi bi-person me-1"></i>Reported by: ${escapeHtml(item.user_name)}
-                            </p>
-                        </div>
+        itemsGrid.innerHTML = items.map(item => {
+          // Check if user has claimed this item
+          const userClaim = userClaims.find(claim => claim.item_id == item.id);
+          const claimBadge = userClaim ?
+            `<span class="badge ${userClaim.status === 'pending' ? 'bg-warning' :
+              userClaim.status === 'approved' ? 'bg-success' : 'bg-danger'} 
+                          claim-status-badge ms-1">
+              ${userClaim.status.charAt(0).toUpperCase() + userClaim.status.slice(1)}
+            </span>` : '';
+
+          return `
+            <div class="col-md-4 mb-4">
+              <div class="card item-card h-100" onclick="viewItemDetails(${item.id})">
+                <img src="${item.image_url ? '..' + item.image_url : '../images/home.jpg'}" 
+                     class="card-img-top item-image" 
+                     alt="${item.title}"
+                     onerror="this.src='../images/home.jpg'">
+                <div class="card-body">
+                  <div class="d-flex justify-content-between align-items-start mb-2">
+                    <h5 class="card-title fw-bold">${escapeHtml(item.title)}</h5>
+                    <div>
+                      <span class="badge ${item.type === 'lost' ? 'type-badge-lost' : 'type-badge-found'}">
+                        ${escapeHtml(item.type.charAt(0).toUpperCase() + item.type.slice(1))}
+                      </span>
+                      ${claimBadge}
                     </div>
+                  </div>
+                  <p class="card-text text-muted">${escapeHtml(item.description.substring(0, 100))}...</p>
+                  <div class="d-flex justify-content-between align-items-center mb-2">
+                    <span class="badge bg-primary">${escapeHtml(item.category)}</span>
+                    <small class="text-muted">${formatDate(item.date)}</small>
+                  </div>
+                  <p class="card-text"><i class="bi bi-geo-alt me-1"></i>${escapeHtml(item.location)}</p>
+                  <p class="card-text small text-muted">
+                    <i class="bi bi-person me-1"></i>Reported by: ${escapeHtml(item.user_name)}
+                  </p>
                 </div>
-            `).join('');
+              </div>
+            </div>
+          `;
+        }).join('');
       }
     }
 
@@ -843,53 +973,82 @@ $types = $typeStmt->fetchAll(PDO::FETCH_COLUMN);
       // Store item ID for claiming
       document.getElementById('claimItemId').value = item.id;
 
-      // Show/hide admin message based on ownership
+      // Show/hide elements based on ownership and claim status
       const claimButton = document.getElementById('claimButton');
       const ownItemMessage = document.getElementById('ownItemMessage');
-      const debugInfo = document.getElementById('debugInfo');
+      const claimStatusInfo = document.getElementById('claimStatusInfo');
+      const claimStatusText = document.getElementById('claimStatusText');
 
       <?php if ($is_logged_in): ?>
-        // Check if user owns this item - FIXED: Parse both as integers for comparison
         const currentUserId = <?php echo $user_id; ?>;
         const itemUserId = parseInt(item.user_id);
         const userOwnsItem = currentUserId === itemUserId;
 
+        // Check if user has already claimed this item
+        const userClaim = userClaims.find(claim => claim.item_id == item.id);
+
         console.log('Ownership check:', {
           currentUserId: currentUserId,
           itemUserId: itemUserId,
-          userOwnsItem: userOwnsItem
+          userOwnsItem: userOwnsItem,
+          userClaim: userClaim
         });
 
-        if (debugInfo) {
-          debugInfo.innerHTML = `Debug: Current User ID: ${currentUserId}, Item User ID: ${itemUserId}, Owns Item: ${userOwnsItem}`;
-          debugInfo.classList.remove('d-none');
-        }
-
         if (userOwnsItem) {
-          // User owns the item - show admin contact message
-          console.log('Showing admin message - user owns item');
+          // User owns the item - show ownership message
+          console.log('Showing ownership message - user owns item');
           if (claimButton) claimButton.style.display = 'none';
           if (ownItemMessage) {
             ownItemMessage.classList.remove('d-none');
-            console.log('Admin message should be visible now');
+          }
+          if (claimStatusInfo) {
+            claimStatusInfo.classList.add('d-none');
+          }
+        } else if (userClaim) {
+          // User has already claimed this item - show claim status
+          console.log('Showing claim status - user has existing claim');
+          if (claimButton) claimButton.style.display = 'none';
+          if (ownItemMessage) {
+            ownItemMessage.classList.add('d-none');
+          }
+          if (claimStatusInfo && claimStatusText) {
+            claimStatusInfo.classList.remove('d-none');
+            let statusMessage = '';
+            let alertClass = 'alert-info';
+
+            switch (userClaim.status) {
+              case 'pending':
+                statusMessage = 'Your claim is pending review by the item owner. They will contact you soon.';
+                alertClass = 'alert-warning';
+                break;
+              case 'approved':
+                statusMessage = 'Your claim has been approved! Please contact the item owner to arrange pickup.';
+                alertClass = 'alert-success';
+                break;
+              case 'rejected':
+                statusMessage = 'Your claim was not approved. The item owner did not find sufficient evidence to support your claim.';
+                alertClass = 'alert-danger';
+                break;
+            }
+
+            claimStatusText.textContent = statusMessage;
+            claimStatusInfo.className = `alert ${alertClass} d-none`;
+            claimStatusInfo.classList.remove('d-none');
           }
         } else {
-          // User doesn't own the item - show claim button
-          console.log('Showing claim button - user does not own item');
-          if (claimButton) claimButton.style.display = 'block';
-          if (ownItemMessage) ownItemMessage.classList.add('d-none');
-
-          // Only enable claim for found items
-          if (item.type !== 'found') {
-            claimButton.disabled = true;
-            claimButton.innerHTML = '<i class="bi bi-x-circle me-2"></i>Can Only Claim Found Items';
-            claimButton.classList.add('btn-secondary');
-            claimButton.classList.remove('btn-primary');
-          } else {
+          // User can claim this item
+          console.log('Showing claim button - user can claim item');
+          if (claimButton) {
+            claimButton.style.display = 'block';
             claimButton.disabled = false;
             claimButton.innerHTML = '<i class="bi bi-hand-thumbs-up me-2"></i>Claim This Item';
-            claimButton.classList.add('btn-primary');
-            claimButton.classList.remove('btn-secondary');
+            claimButton.className = 'btn btn-primary w-100 mt-3';
+          }
+          if (ownItemMessage) {
+            ownItemMessage.classList.add('d-none');
+          }
+          if (claimStatusInfo) {
+            claimStatusInfo.classList.add('d-none');
           }
         }
       <?php endif; ?>
@@ -933,17 +1092,36 @@ $types = $typeStmt->fetchAll(PDO::FETCH_COLUMN);
       const item = allItems.find(i => i.id == itemId);
 
       <?php if ($is_logged_in): ?>
-        // Check if user owns this item
-        const userOwnsItem = <?php echo $user_id; ?> === parseInt(item.user_id);
+        const currentUserId = <?php echo $user_id; ?>;
+        const itemUserId = parseInt(item.user_id);
+        const userOwnsItem = currentUserId === itemUserId;
 
         if (userOwnsItem) {
-          // Show alert and don't open claim modal
-          alert("You cannot claim your own item. Please contact admin if you need assistance.");
+          alert("You cannot claim your own item. To manage this item, please visit your dashboard.");
+          return;
+        }
+
+        // Check if user has already claimed this item
+        const userClaim = userClaims.find(claim => claim.item_id == item.id);
+        if (userClaim) {
+          let message = '';
+          switch (userClaim.status) {
+            case 'pending':
+              message = 'You already have a pending claim for this item. Please wait for the owner to respond.';
+              break;
+            case 'approved':
+              message = 'Your claim for this item has already been approved! Please contact the item owner.';
+              break;
+            case 'rejected':
+              message = 'Your previous claim for this item was rejected. You cannot submit another claim.';
+              break;
+          }
+          alert(message);
           return;
         }
       <?php endif; ?>
 
-      // Only open claim modal for items user doesn't own
+      // Only open claim modal for items user doesn't own and hasn't claimed
       const claimModal = new bootstrap.Modal(document.getElementById('claimModal'));
       claimModal.show();
     }

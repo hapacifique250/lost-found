@@ -322,12 +322,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 </a>
                             </li>
                             <li>
-                                <a class="dropdown-item" href="../user/profile">
+                                <a class="dropdown-item" href="#">
                                     <i class="bi bi-person-circle me-2"></i>My Profile
                                 </a>
                             </li>
                             <li>
-                                <a class="dropdown-item" href="../user/my-items">
+                                <a class="dropdown-item" href="#">
                                     <i class="bi bi-bag me-2"></i>My Items
                                 </a>
                             </li>
@@ -335,7 +335,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 <hr class="dropdown-divider">
                             </li>
                             <li>
-                                <a class="dropdown-item text-danger" href="logout.php">
+                                <a class="dropdown-item text-danger" href="../logout">
                                     <i class="bi bi-box-arrow-right me-2"></i>Logout
                                 </a>
                             </li>

@@ -12,6 +12,67 @@ $user_id = $_SESSION['user_id'];
 $user_name = $_SESSION['user_name'];
 $user_email = $_SESSION['user_email'];
 
+// Get claimed status for user's items
+$claimedItemsStmt = $pdo->prepare("
+    SELECT i.id, COUNT(c.id) as claim_count 
+    FROM items i 
+    LEFT JOIN claims c ON i.id = c.item_id AND c.status = 'approved'
+    WHERE i.user_id = ? 
+    GROUP BY i.id
+");
+$claimedItemsStmt->execute([$user_id]);
+$claimedItems = $claimedItemsStmt->fetchAll(PDO::FETCH_KEY_PAIR);
+
+// Get notifications for user
+$notificationsStmt = $pdo->prepare("
+    SELECT * FROM notifications 
+    WHERE user_id = ? AND is_read = 0 
+    ORDER BY created_at DESC 
+    LIMIT 10
+");
+$notificationsStmt->execute([$user_id]);
+$notifications = $notificationsStmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Get unread notification count
+$unreadCountStmt = $pdo->prepare("
+    SELECT COUNT(*) as unread_count FROM notifications 
+    WHERE user_id = ? AND is_read = 0
+");
+$unreadCountStmt->execute([$user_id]);
+$unreadCount = $unreadCountStmt->fetch(PDO::FETCH_ASSOC);
+
+// Add this function before the HTML
+function time_elapsed_string($datetime, $full = false)
+{
+    $now = new DateTime;
+    $ago = new DateTime($datetime);
+    $diff = $now->diff($ago);
+
+    $diff->w = floor($diff->d / 7);
+    $diff->d -= $diff->w * 7;
+
+    $string = array(
+        'y' => 'year',
+        'm' => 'month',
+        'w' => 'week',
+        'd' => 'day',
+        'h' => 'hour',
+        'i' => 'minute',
+        's' => 'second',
+    );
+
+    foreach ($string as $k => &$v) {
+        if ($diff->$k) {
+            $v = $diff->$k . ' ' . $v . ($diff->$k > 1 ? 's' : '');
+        } else {
+            unset($string[$k]);
+        }
+    }
+
+    if (!$full)
+        $string = array_slice($string, 0, 1);
+    return $string ? implode(', ', $string) . ' ago' : 'just now';
+}
 // Get user profile information
 $profileStmt = $pdo->prepare("SELECT phone, created_at FROM users WHERE id = ?");
 $profileStmt->execute([$user_id]);
@@ -167,6 +228,49 @@ $userClaims = $userClaimsStmt->fetchAll(PDO::FETCH_ASSOC);
                             <i class="bi bi-search"></i> Browse Items
                         </a>
                     </li>
+                    <!-- Notification Bell -->
+                    <li class="nav-item dropdown me-2">
+                        <a class="nav-link position-relative" href="#" id="notificationDropdown" role="button"
+                            data-bs-toggle="dropdown" aria-expanded="false">
+                            <i class="bi bi-bell fs-5 text-dark"></i>
+                            <?php if ($unreadCount['unread_count'] > 0): ?>
+                                <span
+                                    class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger"
+                                    style="font-size: 0.6rem;">
+                                    <?php echo $unreadCount['unread_count']; ?>
+                                </span>
+                            <?php endif; ?>
+                        </a>
+                        <ul class="dropdown-menu dropdown-menu-end shadow" aria-labelledby="notificationDropdown"
+                            style="min-width: 300px; max-height: 400px; overflow-y: auto;">
+                            <li>
+                                <h6 class="dropdown-header fw-bold">Notifications</h6>
+                            </li>
+                            <?php if (empty($notifications)): ?>
+                                <li><a class="dropdown-item text-muted text-center py-3">No new notifications</a></li>
+                            <?php else: ?>
+                                <?php foreach ($notifications as $notification): ?>
+                                    <li>
+                                        <a class="dropdown-item" href="#">
+                                            <div class="d-flex w-100 justify-content-between">
+                                                <small
+                                                    class="text-primary fw-semibold"><?php echo htmlspecialchars($notification['title']); ?></small>
+                                                <small
+                                                    class="text-muted"><?php echo time_elapsed_string($notification['created_at']); ?></small>
+                                            </div>
+                                            <small
+                                                class="text-muted"><?php echo htmlspecialchars($notification['message']); ?></small>
+                                        </a>
+                                    </li>
+                                    <li>
+                                        <hr class="dropdown-divider">
+                                    </li>
+                                <?php endforeach; ?>
+                            <?php endif; ?>
+                            <li><a class="dropdown-item text-center text-primary small"
+                                    href="../pages/notifications">View All</a></li>
+                        </ul>
+                    </li>
                     <li class="nav-item">
                         <a href="../logout" class="btn btn-outline-primary btn-sm ms-2">
                             <i class="bi bi-box-arrow-right"></i> Logout
@@ -207,7 +311,8 @@ $userClaims = $userClaimsStmt->fetchAll(PDO::FETCH_ASSOC);
                                 <i class="bi bi-clock-history text-primary fs-4"></i>
                             </div>
                             <h3 class="fw-bold text-primary mb-1" id="totalItems">
-                                <?php echo $stats['total_items'] ?? 0; ?></h3>
+                                <?php echo $stats['total_items'] ?? 0; ?>
+                            </h3>
                             <p class="text-muted mb-0">Total Items</p>
                         </div>
                     </div>
@@ -219,7 +324,8 @@ $userClaims = $userClaimsStmt->fetchAll(PDO::FETCH_ASSOC);
                                 <i class="bi bi-check-circle text-success fs-4"></i>
                             </div>
                             <h3 class="fw-bold text-success mb-1" id="activeItems">
-                                <?php echo $stats['active_items'] ?? 0; ?></h3>
+                                <?php echo $stats['active_items'] ?? 0; ?>
+                            </h3>
                             <p class="text-muted mb-0">Active Items</p>
                         </div>
                     </div>
@@ -231,7 +337,8 @@ $userClaims = $userClaimsStmt->fetchAll(PDO::FETCH_ASSOC);
                                 <i class="bi bi-hand-thumbs-up text-warning fs-4"></i>
                             </div>
                             <h3 class="fw-bold text-warning mb-1" id="pendingClaims">
-                                <?php echo $pendingClaims['pending_claims'] ?? 0; ?></h3>
+                                <?php echo $pendingClaims['pending_claims'] ?? 0; ?>
+                            </h3>
                             <p class="text-muted mb-0">Pending Claims</p>
                         </div>
                     </div>
@@ -243,7 +350,8 @@ $userClaims = $userClaimsStmt->fetchAll(PDO::FETCH_ASSOC);
                                 <i class="bi bi-arrow-left-right text-info fs-4"></i>
                             </div>
                             <h3 class="fw-bold text-info mb-1" id="resolvedItems">
-                                <?php echo $stats['resolved_items'] ?? 0; ?></h3>
+                                <?php echo $stats['resolved_items'] ?? 0; ?>
+                            </h3>
                             <p class="text-muted mb-0">Resolved Items</p>
                         </div>
                     </div>
@@ -588,14 +696,16 @@ $userClaims = $userClaimsStmt->fetchAll(PDO::FETCH_ASSOC);
                                             <div class="mb-3">
                                                 <label class="form-label fw-semibold">Full Name</label>
                                                 <p class="form-control-static" id="profileName">
-                                                    <?php echo htmlspecialchars($user_name); ?></p>
+                                                    <?php echo htmlspecialchars($user_name); ?>
+                                                </p>
                                             </div>
                                         </div>
                                         <div class="col-md-6">
                                             <div class="mb-3">
                                                 <label class="form-label fw-semibold">Email Address</label>
                                                 <p class="form-control-static" id="profileEmail">
-                                                    <?php echo htmlspecialchars($user_email); ?></p>
+                                                    <?php echo htmlspecialchars($user_email); ?>
+                                                </p>
                                             </div>
                                         </div>
                                         <div class="col-md-6">
@@ -610,7 +720,8 @@ $userClaims = $userClaimsStmt->fetchAll(PDO::FETCH_ASSOC);
                                             <div class="mb-3">
                                                 <label class="form-label fw-semibold">Member Since</label>
                                                 <p class="form-control-static" id="profileSince">
-                                                    <?php echo date('F j, Y', strtotime($profile['created_at'])); ?></p>
+                                                    <?php echo date('F j, Y', strtotime($profile['created_at'])); ?>
+                                                </p>
                                             </div>
                                         </div>
                                     </div>
@@ -777,6 +888,42 @@ $userClaims = $userClaimsStmt->fetchAll(PDO::FETCH_ASSOC);
             // You can add AJAX calls here to refresh specific data
             console.log('Dashboard auto-refresh');
         }, 30000);
+        // Mark notification as read
+        function markNotificationAsRead(notificationId) {
+            fetch('../actions/mark-notification-read', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ notification_id: notificationId })
+            })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        // Update notification badge
+                        updateNotificationBadge();
+                    }
+                })
+                .catch(error => console.error('Error:', error));
+        }
+
+        // Update notification badge count
+        function updateNotificationBadge() {
+            fetch('../actions/get-notification-countp')
+                .then(response => response.json())
+                .then(data => {
+                    const badge = document.querySelector('.notification-badge');
+                    if (data.unread_count > 0) {
+                        badge.textContent = data.unread_count;
+                        badge.style.display = 'inline';
+                    } else {
+                        badge.style.display = 'none';
+                    }
+                });
+        }
+
+        // Auto-refresh notifications every 30 seconds
+        setInterval(updateNotificationBadge, 30000);
     </script>
 </body>
 
