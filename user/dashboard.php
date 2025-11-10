@@ -12,6 +12,231 @@ $user_id = $_SESSION['user_id'];
 $user_name = $_SESSION['user_name'];
 $user_email = $_SESSION['user_email'];
 
+// Handle CRUD operations via POST requests
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $action = $_POST['action'] ?? '';
+
+    switch ($action) {
+        case 'create_item':
+            $title = $_POST['title'] ?? '';
+            $description = $_POST['description'] ?? '';
+            $category = $_POST['category'] ?? '';
+            $location = $_POST['location'] ?? '';
+            $date = $_POST['date'] ?? '';
+            $type = $_POST['type'] ?? 'lost';
+            
+            if ($title && $description && $category && $location && $date) {
+                try {
+                    // Handle file upload
+                    $image_url = '';
+                    if (isset($_FILES['image']) && $_FILES['image']['error'] === UPLOAD_ERR_OK) {
+                        $upload_dir = '../uploads/items/';
+                        if (!is_dir($upload_dir)) {
+                            mkdir($upload_dir, 0777, true);
+                        }
+                        
+                        $file_extension = pathinfo($_FILES['image']['name'], PATHINFO_EXTENSION);
+                        $filename = uniqid() . '.' . $file_extension;
+                        $target_path = $upload_dir . $filename;
+                        
+                        if (move_uploaded_file($_FILES['image']['tmp_name'], $target_path)) {
+                            $image_url = 'uploads/items/' . $filename;
+                        }
+                    }
+                    
+                    // Insert item
+                    $stmt = $pdo->prepare("
+                        INSERT INTO items (user_id, title, description, category, location, date, type, image_url, status, created_at, updated_at) 
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', NOW(), NOW())
+                    ");
+                    $stmt->execute([$user_id, $title, $description, $category, $location, $date, $type, $image_url]);
+                    
+                    echo json_encode(['success' => true, 'message' => 'Item created successfully!']);
+                } catch (Exception $e) {
+                    echo json_encode(['success' => false, 'message' => 'Error creating item: ' . $e->getMessage()]);
+                }
+            } else {
+                echo json_encode(['success' => false, 'message' => 'All fields are required']);
+            }
+            exit;
+
+        case 'update_item':
+            $item_id = $_POST['item_id'] ?? '';
+            $title = $_POST['title'] ?? '';
+            $description = $_POST['description'] ?? '';
+            $category = $_POST['category'] ?? '';
+            $location = $_POST['location'] ?? '';
+            $date = $_POST['date'] ?? '';
+            
+            if ($item_id && $title && $description && $category && $location && $date) {
+                try {
+                    // Handle file upload if new image provided
+                    $image_url = $_POST['current_image'] ?? '';
+                    if (isset($_FILES['image']) && $_FILES['image']['error'] === UPLOAD_ERR_OK) {
+                        $upload_dir = '../uploads/items/';
+                        if (!is_dir($upload_dir)) {
+                            mkdir($upload_dir, 0777, true);
+                        }
+                        
+                        $file_extension = pathinfo($_FILES['image']['name'], PATHINFO_EXTENSION);
+                        $filename = uniqid() . '.' . $file_extension;
+                        $target_path = $upload_dir . $filename;
+                        
+                        if (move_uploaded_file($_FILES['image']['tmp_name'], $target_path)) {
+                            // Delete old image if exists
+                            if ($image_url && file_exists('../' . $image_url)) {
+                                unlink('../' . $image_url);
+                            }
+                            $image_url = 'uploads/items/' . $filename;
+                        }
+                    }
+                    
+                    // Update item
+                    $stmt = $pdo->prepare("
+                        UPDATE items 
+                        SET title = ?, description = ?, category = ?, location = ?, date = ?, image_url = ?, updated_at = NOW() 
+                        WHERE id = ? AND user_id = ?
+                    ");
+                    $stmt->execute([$title, $description, $category, $location, $date, $image_url, $item_id, $user_id]);
+                    
+                    echo json_encode(['success' => true, 'message' => 'Item updated successfully!']);
+                } catch (Exception $e) {
+                    echo json_encode(['success' => false, 'message' => 'Error updating item: ' . $e->getMessage()]);
+                }
+            } else {
+                echo json_encode(['success' => false, 'message' => 'All fields are required']);
+            }
+            exit;
+
+        case 'delete_item':
+            $item_id = $_POST['item_id'] ?? '';
+            
+            if ($item_id) {
+                try {
+                    // Get item details to delete image
+                    $itemStmt = $pdo->prepare("SELECT image_url FROM items WHERE id = ? AND user_id = ?");
+                    $itemStmt->execute([$item_id, $user_id]);
+                    $item = $itemStmt->fetch(PDO::FETCH_ASSOC);
+                    
+                    // Delete image file if exists
+                    if ($item && $item['image_url'] && file_exists('../' . $item['image_url'])) {
+                        unlink('../' . $item['image_url']);
+                    }
+                    
+                    // Delete related claims first
+                    $deleteClaimsStmt = $pdo->prepare("DELETE FROM claims WHERE item_id = ?");
+                    $deleteClaimsStmt->execute([$item_id]);
+                    
+                    // Delete item
+                    $deleteStmt = $pdo->prepare("DELETE FROM items WHERE id = ? AND user_id = ?");
+                    $deleteStmt->execute([$item_id, $user_id]);
+                    
+                    echo json_encode(['success' => true, 'message' => 'Item deleted successfully!']);
+                } catch (Exception $e) {
+                    echo json_encode(['success' => false, 'message' => 'Error deleting item: ' . $e->getMessage()]);
+                }
+            } else {
+                echo json_encode(['success' => false, 'message' => 'Invalid item ID']);
+            }
+            exit;
+
+        case 'update_profile':
+            $name = $_POST['name'] ?? '';
+            $phone = $_POST['phone'] ?? '';
+            
+            if ($name) {
+                try {
+                    $stmt = $pdo->prepare("UPDATE users SET name = ?, phone = ?, updated_at = NOW() WHERE id = ?");
+                    $stmt->execute([$name, $phone, $user_id]);
+                    
+                    // Update session
+                    $_SESSION['user_name'] = $name;
+                    
+                    echo json_encode(['success' => true, 'message' => 'Profile updated successfully!']);
+                } catch (Exception $e) {
+                    echo json_encode(['success' => false, 'message' => 'Error updating profile: ' . $e->getMessage()]);
+                }
+            } else {
+                echo json_encode(['success' => false, 'message' => 'Name is required']);
+            }
+            exit;
+
+        case 'change_password':
+            $current_password = $_POST['current_password'] ?? '';
+            $new_password = $_POST['new_password'] ?? '';
+            $confirm_password = $_POST['confirm_password'] ?? '';
+            
+            if ($current_password && $new_password && $confirm_password) {
+                if ($new_password !== $confirm_password) {
+                    echo json_encode(['success' => false, 'message' => 'New passwords do not match']);
+                    exit;
+                }
+                
+                try {
+                    // Verify current password
+                    $userStmt = $pdo->prepare("SELECT password FROM users WHERE id = ?");
+                    $userStmt->execute([$user_id]);
+                    $user = $userStmt->fetch(PDO::FETCH_ASSOC);
+                    
+                    if ($user && password_verify($current_password, $user['password'])) {
+                        // Update password
+                        $hashed_password = password_hash($new_password, PASSWORD_DEFAULT);
+                        $updateStmt = $pdo->prepare("UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?");
+                        $updateStmt->execute([$hashed_password, $user_id]);
+                        
+                        echo json_encode(['success' => true, 'message' => 'Password changed successfully!']);
+                    } else {
+                        echo json_encode(['success' => false, 'message' => 'Current password is incorrect']);
+                    }
+                } catch (Exception $e) {
+                    echo json_encode(['success' => false, 'message' => 'Error changing password: ' . $e->getMessage()]);
+                }
+            } else {
+                echo json_encode(['success' => false, 'message' => 'All password fields are required']);
+            }
+            exit;
+
+        case 'cancel_claim':
+            $claim_id = $_POST['claim_id'] ?? '';
+            
+            if ($claim_id) {
+                try {
+                    $stmt = $pdo->prepare("DELETE FROM claims WHERE id = ? AND claimer_id = ?");
+                    $stmt->execute([$claim_id, $user_id]);
+                    
+                    echo json_encode(['success' => true, 'message' => 'Claim cancelled successfully!']);
+                } catch (Exception $e) {
+                    echo json_encode(['success' => false, 'message' => 'Error cancelling claim: ' . $e->getMessage()]);
+                }
+            } else {
+                echo json_encode(['success' => false, 'message' => 'Invalid claim ID']);
+            }
+            exit;
+
+        case 'get_item_details':
+            $item_id = $_POST['item_id'] ?? '';
+            
+            if ($item_id) {
+                try {
+                    $stmt = $pdo->prepare("SELECT * FROM items WHERE id = ? AND user_id = ?");
+                    $stmt->execute([$item_id, $user_id]);
+                    $item = $stmt->fetch(PDO::FETCH_ASSOC);
+                    
+                    if ($item) {
+                        echo json_encode(['success' => true, 'item' => $item]);
+                    } else {
+                        echo json_encode(['success' => false, 'message' => 'Item not found']);
+                    }
+                } catch (Exception $e) {
+                    echo json_encode(['success' => false, 'message' => 'Database error: ' . $e->getMessage()]);
+                }
+            } else {
+                echo json_encode(['success' => false, 'message' => 'Item ID is required']);
+            }
+            exit;
+    }
+}
+
 // Get claimed status for user's items
 $claimedItemsStmt = $pdo->prepare("
     SELECT i.id, COUNT(c.id) as claim_count 
@@ -207,6 +432,10 @@ $userClaims = $userClaimsStmt->fetchAll(PDO::FETCH_ASSOC);
             padding: 0.75rem;
             border: 1px solid #e9ecef;
         }
+
+        .notification-badge {
+            font-size: 0.6rem;
+        }
     </style>
 </head>
 
@@ -234,9 +463,7 @@ $userClaims = $userClaimsStmt->fetchAll(PDO::FETCH_ASSOC);
                             data-bs-toggle="dropdown" aria-expanded="false">
                             <i class="bi bi-bell fs-5 text-dark"></i>
                             <?php if ($unreadCount['unread_count'] > 0): ?>
-                                <span
-                                    class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger"
-                                    style="font-size: 0.6rem;">
+                                <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger notification-badge">
                                     <?php echo $unreadCount['unread_count']; ?>
                                 </span>
                             <?php endif; ?>
@@ -253,13 +480,10 @@ $userClaims = $userClaimsStmt->fetchAll(PDO::FETCH_ASSOC);
                                     <li>
                                         <a class="dropdown-item" href="#">
                                             <div class="d-flex w-100 justify-content-between">
-                                                <small
-                                                    class="text-primary fw-semibold"><?php echo htmlspecialchars($notification['title']); ?></small>
-                                                <small
-                                                    class="text-muted"><?php echo time_elapsed_string($notification['created_at']); ?></small>
+                                                <small class="text-primary fw-semibold"><?php echo htmlspecialchars($notification['title']); ?></small>
+                                                <small class="text-muted"><?php echo time_elapsed_string($notification['created_at']); ?></small>
                                             </div>
-                                            <small
-                                                class="text-muted"><?php echo htmlspecialchars($notification['message']); ?></small>
+                                            <small class="text-muted"><?php echo htmlspecialchars($notification['message']); ?></small>
                                         </a>
                                     </li>
                                     <li>
@@ -292,9 +516,9 @@ $userClaims = $userClaimsStmt->fetchAll(PDO::FETCH_ASSOC);
                         overview.</p>
                 </div>
                 <div class="col-md-4 text-md-end">
-                    <a href="../pages/post" class="btn btn-primary">
+                    <button class="btn btn-primary" onclick="addNewItem()">
                         <i class="bi bi-plus-circle me-2"></i>Post New Item
-                    </a>
+                    </button>
                 </div>
             </div>
         </div>
@@ -409,9 +633,9 @@ $userClaims = $userClaimsStmt->fetchAll(PDO::FETCH_ASSOC);
                                             <i class="bi bi-inbox text-muted" style="font-size: 3rem;"></i>
                                             <h5 class="mt-3 text-muted">No Lost Items</h5>
                                             <p class="text-muted">You haven't reported any lost items yet.</p>
-                                            <a href="../pages/post?type=lost" class="btn btn-primary">
+                                            <button class="btn btn-primary" onclick="addNewItem()">
                                                 <i class="bi bi-plus-circle me-2"></i>Report Lost Item
-                                            </a>
+                                            </button>
                                         </div>
                                     <?php else: ?>
                                         <div class="table-responsive">
@@ -459,12 +683,15 @@ $userClaims = $userClaimsStmt->fetchAll(PDO::FETCH_ASSOC);
                                                                     class="badge <?php echo $item['status'] === 'active' ? 'bg-success' : 'bg-secondary'; ?>">
                                                                     <?php echo ucfirst($item['status']); ?>
                                                                 </span>
+                                                                <?php if (isset($claimedItems[$item['id']]) && $claimedItems[$item['id']] > 0): ?>
+                                                                    <br>
+                                                                    <small class="text-success mt-1">
+                                                                        <i class="bi bi-check-circle-fill"></i> Claimed
+                                                                    </small>
+                                                                <?php endif; ?>
                                                             </td>
                                                             <td>
-                                                                <button class="btn btn-sm btn-outline-primary"
-                                                                    onclick="viewItem(<?php echo $item['id']; ?>)">
-                                                                    <i class="bi bi-eye"></i>
-                                                                </button>
+
                                                                 <button class="btn btn-sm btn-outline-warning"
                                                                     onclick="editItem(<?php echo $item['id']; ?>)">
                                                                     <i class="bi bi-pencil"></i>
@@ -499,9 +726,9 @@ $userClaims = $userClaimsStmt->fetchAll(PDO::FETCH_ASSOC);
                                             <i class="bi bi-inbox text-muted" style="font-size: 3rem;"></i>
                                             <h5 class="mt-3 text-muted">No Found Items</h5>
                                             <p class="text-muted">You haven't posted any found items yet.</p>
-                                            <a href="../pages/post?type=found" class="btn btn-primary">
+                                            <button class="btn btn-primary" onclick="addNewItem()">
                                                 <i class="bi bi-plus-circle me-2"></i>Post Found Item
-                                            </a>
+                                            </button>
                                         </div>
                                     <?php else: ?>
                                         <div class="table-responsive">
@@ -549,12 +776,15 @@ $userClaims = $userClaimsStmt->fetchAll(PDO::FETCH_ASSOC);
                                                                     class="badge <?php echo $item['status'] === 'active' ? 'bg-success' : 'bg-secondary'; ?>">
                                                                     <?php echo ucfirst($item['status']); ?>
                                                                 </span>
+                                                                <?php if (isset($claimedItems[$item['id']]) && $claimedItems[$item['id']] > 0): ?>
+                                                                    <br>
+                                                                    <small class="text-success mt-1">
+                                                                        <i class="bi bi-check-circle-fill"></i> Claimed
+                                                                    </small>
+                                                                <?php endif; ?>
                                                             </td>
                                                             <td>
-                                                                <button class="btn btn-sm btn-outline-primary"
-                                                                    onclick="viewItem(<?php echo $item['id']; ?>)">
-                                                                    <i class="bi bi-eye"></i>
-                                                                </button>
+
                                                                 <button class="btn btn-sm btn-outline-warning"
                                                                     onclick="editItem(<?php echo $item['id']; ?>)">
                                                                     <i class="bi bi-pencil"></i>
@@ -660,10 +890,7 @@ $userClaims = $userClaimsStmt->fetchAll(PDO::FETCH_ASSOC);
                                                                 </small>
                                                             </td>
                                                             <td>
-                                                                <button class="btn btn-sm btn-outline-primary"
-                                                                    onclick="viewClaim(<?php echo $claim['id']; ?>)">
-                                                                    <i class="bi bi-eye"></i>
-                                                                </button>
+
                                                                 <button class="btn btn-sm btn-outline-info"
                                                                     onclick="contactOwner('<?php echo htmlspecialchars($claim['owner_email']); ?>', '<?php echo htmlspecialchars($claim['owner_phone']); ?>')">
                                                                     <i class="bi bi-telephone"></i>
@@ -759,10 +986,8 @@ $userClaims = $userClaimsStmt->fetchAll(PDO::FETCH_ASSOC);
                 <div class="col-md-2">
                     <h6 class="fw-bold mb-3">Quick Links</h6>
                     <ul class="list-unstyled">
-                        <li class="mb-2"><a href="pages/search" class="text-white-50 text-decoration-none">Browse
-                                Items</a></li>
-                        <li class="mb-2"><a href="pages/post" class="text-white-50 text-decoration-none">Post Item</a>
-                        </li>
+                        <li class="mb-2"><a href="../pages/search" class="text-white-50 text-decoration-none">Browse Items</a></li>
+                        <li class="mb-2"><a href="#" class="text-white-50 text-decoration-none" onclick="addNewItem()">Post Item</a></li>
                         <li class="mb-2"><a href="#" class="text-white-50 text-decoration-none">Dashboard</a></li>
                     </ul>
                 </div>
@@ -793,6 +1018,178 @@ $userClaims = $userClaimsStmt->fetchAll(PDO::FETCH_ASSOC);
         </div>
     </footer>
 
+    <!-- Modals -->
+    <!-- Create/Edit Item Modal -->
+    <div class="modal fade" id="itemModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="itemModalTitle">Add New Item</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <form id="itemForm" enctype="multipart/form-data">
+                    <div class="modal-body">
+                        <input type="hidden" id="itemId" name="item_id">
+                        <input type="hidden" id="currentImage" name="current_image">
+                        
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label class="form-label">Title *</label>
+                                    <input type="text" class="form-control" id="itemTitle" name="title" required>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label class="form-label">Category *</label>
+                                    <select class="form-select" id="itemCategory" name="category" required>
+                                        <option value="">Select Category</option>
+                                        <option value="Electronics">Electronics</option>
+                                        <option value="Books">Books</option>
+                                        <option value="Clothing">Clothing</option>
+                                        <option value="Accessories">Accessories</option>
+                                        <option value="Documents">Documents</option>
+                                        <option value="Keys">Keys</option>
+                                        <option value="Other">Other</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label class="form-label">Description *</label>
+                            <textarea class="form-control" id="itemDescription" name="description" rows="3" required></textarea>
+                        </div>
+                        
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label class="form-label">Location *</label>
+                                    <input type="text" class="form-control" id="itemLocation" name="location" required>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label class="form-label">Date *</label>
+                                    <input type="date" class="form-control" id="itemDate" name="date" required>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label class="form-label">Type</label>
+                            <div>
+                                <div class="form-check form-check-inline">
+                                    <input class="form-check-input" type="radio" name="type" id="typeLost" value="lost" checked>
+                                    <label class="form-check-label" for="typeLost">Lost Item</label>
+                                </div>
+                                <div class="form-check form-check-inline">
+                                    <input class="form-check-input" type="radio" name="type" id="typeFound" value="found">
+                                    <label class="form-check-label" for="typeFound">Found Item</label>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label class="form-label">Image</label>
+                            <input type="file" class="form-control" id="itemImage" name="image" accept="image/*">
+                            <div class="form-text">Upload a clear photo of the item (optional)</div>
+                            <div id="imagePreview" class="mt-2"></div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" class="btn btn-primary">Save Item</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Edit Profile Modal -->
+    <div class="modal fade" id="profileModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Edit Profile</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <form id="profileForm">
+                    <div class="modal-body">
+                        <div class="mb-3">
+                            <label class="form-label">Full Name *</label>
+                            <input type="text" class="form-control" id="editName" name="name" value="<?php echo htmlspecialchars($user_name); ?>" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Email</label>
+                            <input type="email" class="form-control" value="<?php echo htmlspecialchars($user_email); ?>" disabled>
+                            <div class="form-text">Email cannot be changed</div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Phone Number</label>
+                            <input type="tel" class="form-control" id="editPhone" name="phone" value="<?php echo $profile['phone'] ? htmlspecialchars($profile['phone']) : ''; ?>">
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" class="btn btn-primary">Update Profile</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Change Password Modal -->
+    <div class="modal fade" id="passwordModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Change Password</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <form id="passwordForm">
+                    <div class="modal-body">
+                        <div class="mb-3">
+                            <label class="form-label">Current Password *</label>
+                            <input type="password" class="form-control" name="current_password" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">New Password *</label>
+                            <input type="password" class="form-control" name="new_password" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Confirm New Password *</label>
+                            <input type="password" class="form-control" name="confirm_password" required>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" class="btn btn-primary">Change Password</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Delete Confirmation Modal -->
+    <div class="modal fade" id="deleteModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Confirm Deletion</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <p>Are you sure you want to delete this item? This action cannot be undone.</p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-danger" id="confirmDelete">Delete</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Dark Mode Toggle -->
     <button class="dark-mode-toggle" id="darkModeToggle" title="Toggle Dark Mode">
         <i class="bi bi-moon-fill"></i>
@@ -801,33 +1198,61 @@ $userClaims = $userClaimsStmt->fetchAll(PDO::FETCH_ASSOC);
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         // JavaScript functions for dashboard interactions
-        function viewItem(itemId) {
-            window.location.href = `../pages/item-details?id=${itemId}`;
-        }
+        let currentItemId = null;
+        let currentClaimId = null;
 
         function editItem(itemId) {
-            window.location.href = `../pages/edit-item?id=${itemId}`;
+            // Fetch item details and populate form
+            fetch('', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: `action=get_item_details&item_id=${itemId}`
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    const item = data.item;
+                    document.getElementById('itemModalTitle').textContent = 'Edit Item';
+                    document.getElementById('itemId').value = item.id;
+                    document.getElementById('itemTitle').value = item.title;
+                    document.getElementById('itemDescription').value = item.description;
+                    document.getElementById('itemCategory').value = item.category;
+                    document.getElementById('itemLocation').value = item.location;
+                    document.getElementById('itemDate').value = item.date;
+                    document.getElementById('currentImage').value = item.image_url || '';
+                    
+                    if (item.type === 'found') {
+                        document.getElementById('typeFound').checked = true;
+                    } else {
+                        document.getElementById('typeLost').checked = true;
+                    }
+                    
+                    // Show image preview
+                    const imagePreview = document.getElementById('imagePreview');
+                    if (item.image_url) {
+                        imagePreview.innerHTML = `<img src="../${item.image_url}" alt="Current image" style="max-width: 200px; max-height: 150px;" class="rounded">`;
+                    } else {
+                        imagePreview.innerHTML = '';
+                    }
+                    
+                    const modal = new bootstrap.Modal(document.getElementById('itemModal'));
+                    modal.show();
+                } else {
+                    showAlert('Error loading item details', 'error');
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                showAlert('Error loading item details', 'error');
+            });
         }
 
         function deleteItem(itemId) {
-            if (confirm('Are you sure you want to delete this item? This action cannot be undone.')) {
-                // AJAX call to delete item
-                fetch(`../actions/delete-item?id=${itemId}`, {
-                    method: 'DELETE',
-                })
-                    .then(response => response.json())
-                    .then(data => {
-                        if (data.success) {
-                            location.reload();
-                        } else {
-                            alert('Error deleting item: ' + data.message);
-                        }
-                    })
-                    .catch(error => {
-                        console.error('Error:', error);
-                        alert('Error deleting item');
-                    });
-            }
+            currentItemId = itemId;
+            const modal = new bootstrap.Modal(document.getElementById('deleteModal'));
+            modal.show();
         }
 
         function viewClaim(claimId) {
@@ -845,31 +1270,49 @@ $userClaims = $userClaimsStmt->fetchAll(PDO::FETCH_ASSOC);
 
         function cancelClaim(claimId) {
             if (confirm('Are you sure you want to cancel this claim?')) {
-                // AJAX call to cancel claim
-                fetch(`../actions/cancel-claim?id=${claimId}`, {
+                fetch('', {
                     method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: `action=cancel_claim&claim_id=${claimId}`
                 })
-                    .then(response => response.json())
-                    .then(data => {
-                        if (data.success) {
-                            location.reload();
-                        } else {
-                            alert('Error canceling claim: ' + data.message);
-                        }
-                    })
-                    .catch(error => {
-                        console.error('Error:', error);
-                        alert('Error canceling claim');
-                    });
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        showAlert(data.message, 'success');
+                        setTimeout(() => location.reload(), 1000);
+                    } else {
+                        showAlert(data.message, 'error');
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    showAlert('Error cancelling claim', 'error');
+                });
             }
         }
 
         function editProfile() {
-            window.location.href = '../pages/edit-profile';
+            const modal = new bootstrap.Modal(document.getElementById('profileModal'));
+            modal.show();
         }
 
         function changePassword() {
-            window.location.href = '../pages/change-password';
+            const modal = new bootstrap.Modal(document.getElementById('passwordModal'));
+            modal.show();
+        }
+
+        function addNewItem() {
+            document.getElementById('itemModalTitle').textContent = 'Add New Item';
+            document.getElementById('itemForm').reset();
+            document.getElementById('itemId').value = '';
+            document.getElementById('currentImage').value = '';
+            document.getElementById('imagePreview').innerHTML = '';
+            document.getElementById('typeLost').checked = true;
+            
+            const modal = new bootstrap.Modal(document.getElementById('itemModal'));
+            modal.show();
         }
 
         // Dark mode toggle
@@ -883,48 +1326,198 @@ $userClaims = $userClaimsStmt->fetchAll(PDO::FETCH_ASSOC);
             }
         });
 
+        // Form Submissions
+        document.getElementById('itemForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const formData = new FormData(this);
+            formData.append('action', this.querySelector('#itemId').value ? 'update_item' : 'create_item');
+            
+            fetch('', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    showAlert(data.message, 'success');
+                    bootstrap.Modal.getInstance(document.getElementById('itemModal')).hide();
+                    setTimeout(() => location.reload(), 1000);
+                } else {
+                    showAlert(data.message, 'error');
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                showAlert('Error saving item', 'error');
+            });
+        });
+
+        document.getElementById('profileForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const formData = new FormData(this);
+            formData.append('action', 'update_profile');
+            
+            fetch('', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    showAlert(data.message, 'success');
+                    bootstrap.Modal.getInstance(document.getElementById('profileModal')).hide();
+                    setTimeout(() => location.reload(), 1000);
+                } else {
+                    showAlert(data.message, 'error');
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                showAlert('Error updating profile', 'error');
+            });
+        });
+
+        document.getElementById('passwordForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const formData = new FormData(this);
+            formData.append('action', 'change_password');
+            
+            fetch('', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    showAlert(data.message, 'success');
+                    bootstrap.Modal.getInstance(document.getElementById('passwordModal')).hide();
+                    this.reset();
+                } else {
+                    showAlert(data.message, 'error');
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                showAlert('Error changing password', 'error');
+            });
+        });
+
+        // Delete confirmation
+        document.getElementById('confirmDelete').addEventListener('click', function() {
+            if (currentItemId) {
+                fetch('', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: `action=delete_item&item_id=${currentItemId}`
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        showAlert(data.message, 'success');
+                        bootstrap.Modal.getInstance(document.getElementById('deleteModal')).hide();
+                        setTimeout(() => location.reload(), 1000);
+                    } else {
+                        showAlert(data.message, 'error');
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    showAlert('Error deleting item', 'error');
+                });
+            }
+        });
+
+        // Image preview
+        document.getElementById('itemImage').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            const preview = document.getElementById('imagePreview');
+            
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    preview.innerHTML = `<img src="${e.target.result}" alt="Preview" style="max-width: 200px; max-height: 150px;" class="rounded">`;
+                };
+                reader.readAsDataURL(file);
+            } else {
+                preview.innerHTML = '';
+            }
+        });
+
+        // Show alert function
+        function showAlert(message, type) {
+            const alertClass = type === 'success' ? 'alert-success' : 'alert-danger';
+            const alertDiv = document.createElement('div');
+            alertDiv.className = `alert ${alertClass} alert-dismissible fade show position-fixed`;
+            alertDiv.style.cssText = 'top: 20px; right: 20px; z-index: 9999; min-width: 300px;';
+            alertDiv.innerHTML = `
+                <i class="bi ${type === 'success' ? 'bi-check-circle' : 'bi-exclamation-triangle'} me-2"></i>
+                ${message}
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            `;
+            
+            document.body.appendChild(alertDiv);
+            
+            setTimeout(() => {
+                if (alertDiv.parentNode) {
+                    alertDiv.remove();
+                }
+            }, 5000);
+        }
+
         // Auto-refresh dashboard data every 30 seconds
         setInterval(() => {
             // You can add AJAX calls here to refresh specific data
             console.log('Dashboard auto-refresh');
         }, 30000);
-        // Mark notification as read
+
+        // Mark notification as read when clicked
+        document.addEventListener('click', function(e) {
+            if (e.target.closest('.dropdown-item') && !e.target.closest('.dropdown-item').getAttribute('href').includes('notifications')) {
+                const notificationId = e.target.closest('.dropdown-item').dataset.notificationId;
+                if (notificationId) {
+                    markNotificationAsRead(notificationId);
+                }
+            }
+        });
+
         function markNotificationAsRead(notificationId) {
-            fetch('../actions/mark-notification-read', {
+            fetch('../actions/mark-notification-read.php', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({ notification_id: notificationId })
             })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.success) {
-                        // Update notification badge
-                        updateNotificationBadge();
-                    }
-                })
-                .catch(error => console.error('Error:', error));
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    updateNotificationBadge();
+                }
+            })
+            .catch(error => console.error('Error:', error));
         }
 
-        // Update notification badge count
         function updateNotificationBadge() {
-            fetch('../actions/get-notification-countp')
-                .then(response => response.json())
-                .then(data => {
-                    const badge = document.querySelector('.notification-badge');
-                    if (data.unread_count > 0) {
-                        badge.textContent = data.unread_count;
-                        badge.style.display = 'inline';
-                    } else {
-                        badge.style.display = 'none';
-                    }
-                });
+            fetch('../actions/get-notification-count.php')
+            .then(response => response.json())
+            .then(data => {
+                const badge = document.querySelector('.notification-badge');
+                if (data.unread_count > 0) {
+                    badge.textContent = data.unread_count;
+                    badge.style.display = 'inline';
+                } else {
+                    badge.style.display = 'none';
+                }
+            });
         }
 
         // Auto-refresh notifications every 30 seconds
         setInterval(updateNotificationBadge, 30000);
     </script>
 </body>
-
 </html>

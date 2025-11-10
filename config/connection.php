@@ -1,14 +1,14 @@
 <?php
-$host = 'bheewuqktoousmianri0-mysql.services.clever-cloud.com';  
-$dbname = 'bheewuqktoousmianri0';    // Your database name
-$username = 'un7jktglvtdihni2';           // Your database username
-$password = 'K4I5u7xYVqNPTQaoo8nA';   
+// $host = 'bheewuqktoousmianri0-mysql.services.clever-cloud.com';  
+// $dbname = 'bheewuqktoousmianri0';    // Your database name
+// $username = 'un7jktglvtdihni2';           // Your database username
+// $password = 'K4I5u7xYVqNPTQaoo8nA';   
 
 
-// $host = 'localhost';  
-// $dbname = 'lost_found';    // Your database name
-// $username = 'root';           // Your database username
-// $password = '';  // Your database password
+$host = 'localhost';  
+$dbname = 'lost_found';    // Your database name
+$username = 'root';           // Your database username
+$password = '';  // Your database password
 
 try {
     // Create connection

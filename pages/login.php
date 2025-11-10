@@ -21,21 +21,29 @@ if (isset($_POST['submit'])) {
             if ($user) {
                 if ($user['status'] !== 'active') {
                     $error = "Your account is suspended. Please contact the administrator for assistance";
-                }else if (password_verify($password, $user['password'])) {
+                } else if (password_verify($password, $user['password'])) {
                     // Login successful
                     $_SESSION['user_id'] = $user['id'];
                     $_SESSION['user_name'] = $user['name'];
                     $_SESSION['user_email'] = $user['email'];
                     $_SESSION['logged_in'] = true;
                     $_SESSION['role'] = $user['role'];
+                    if ($user['role'] == 'admin') {
+                        header("Location:../admin/admin");
 
+                    } else {
+                        header("Location:search");
 
-                    header("Location:search");
+                    }
+
 
                     exit();
                 } else {
                     $error = "Invalid email or password";
                 }
+            } else {
+                $error = "Invalid email or password";
+
             }
         } catch (PDOException $e) {
             $error = "Database error: " . $e->getMessage();
